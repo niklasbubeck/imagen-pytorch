@@ -23,7 +23,7 @@ from einops.layers.torch import Rearrange
 from imagen_pytorch.t5 import t5_encode_text, get_encoded_dim, DEFAULT_T5_NAME
 
 from imagen_pytorch.imagen_video import Unet3D, resize_video_to, scale_video_time
-
+from imagen_pytorch.semantic_encoder import SemanticEncoder
 # helper functions
 
 def exists(val):
@@ -1101,6 +1101,21 @@ class UpsampleCombiner(nn.Module):
         fmaps = [resize_image_to(fmap, target_size) for fmap in fmaps]
         outs = [conv(fmap) for fmap, conv in zip(fmaps, self.fmap_convs)]
         return torch.cat((x, *outs), dim = 1)
+
+class AutoEncodedUnet(nn.Module):
+    def __init__(self, cfg_semantic, cfg_unet, lowres_cond=False):
+        super().__init__()
+        self.lowres_cond = lowres_cond
+        self.encoder = SemanticEncoder(**cfg_semantic)
+        self.unet = Unet(**cfg_unet, lowres_cond=lowres_cond)
+
+    def forward(self, x0, xt, t):
+        style_emb = self.encoder(x0)
+        out = self.unet(xt, t, text_embeds=style_emb)
+        return out
+    
+    def cast_model_parameters(self, *args, **kwargs):
+        return self
 
 class Unet(nn.Module):
     def __init__(
