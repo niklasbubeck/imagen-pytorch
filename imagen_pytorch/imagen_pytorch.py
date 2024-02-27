@@ -71,7 +71,6 @@ def cast_tuple(val, length = None):
         val = tuple(val)
 
     output = val if isinstance(val, tuple) else ((val,) * default(length, 1))
-
     if exists(length):
         assert len(output) == length
 

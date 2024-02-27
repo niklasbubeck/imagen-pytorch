@@ -21,7 +21,6 @@ from imagen_pytorch.imagen_pytorch import (
     GaussianDiffusionContinuousTimes,
     Unet,
     NullUnet,
-    AutoEncodedUnet,
     first,
     exists,
     identity,
@@ -44,6 +43,7 @@ from imagen_pytorch.imagen_pytorch import (
 
 from imagen_pytorch.imagen_video import (
     Unet3D,
+    DiffusionAutoEncoders3D,
     resize_video_to,
     scale_video_time
 )
@@ -150,22 +150,31 @@ class ElucidatedImagen(nn.Module):
         self.unet_being_trained_index = -1 # keeps track of which unet is being trained at the moment
 
         for ind, one_unet in enumerate(unets):
-            assert isinstance(one_unet, (AutoEncodedUnet, Unet, Unet3D, NullUnet))
+            assert isinstance(one_unet, (DiffusionAutoEncoders3D, Unet, Unet3D, NullUnet))
             is_first = ind == 0
 
-            one_unet = one_unet.cast_model_parameters(
+            if isinstance(one_unet,(DiffusionAutoEncoders3D)):
+                one_unet.unet = one_unet.unet.cast_model_parameters(
                 lowres_cond = not is_first,
                 cond_on_text = self.condition_on_text,
                 text_embed_dim = self.text_embed_dim if self.condition_on_text else None,
                 channels = self.channels,
                 channels_out = self.channels
             )
+            else:
+                one_unet = one_unet.cast_model_parameters(
+                    lowres_cond = not is_first,
+                    cond_on_text = self.condition_on_text,
+                    text_embed_dim = self.text_embed_dim if self.condition_on_text else None,
+                    channels = self.channels,
+                    channels_out = self.channels
+                )
 
             self.unets.append(one_unet)
 
         # determine whether we are training on images or video
 
-        is_video = any([isinstance(unet, Unet3D) for unet in self.unets])
+        is_video = any([isinstance(unet, (Unet3D, DiffusionAutoEncoders3D)) for unet in self.unets])
         self.is_video = is_video
 
         self.right_pad_dims_to_datatype = partial(rearrange, pattern = ('b -> b 1 1 1' if not is_video else 'b -> b 1 1 1 1'))
@@ -355,7 +364,6 @@ class ElucidatedImagen(nn.Module):
             sigma = torch.full((batch,), sigma, device = device)
 
         padded_sigma = self.right_pad_dims_to_datatype(sigma)
-
         net_out = unet_forward(
             self.c_in(sigma_data, padded_sigma) * noised_images,
             self.c_noise(sigma),
@@ -560,6 +568,7 @@ class ElucidatedImagen(nn.Module):
         inpaint_masks = None,
         inpaint_resample_times = 5,
         init_images = None,
+        encoder_images=None,
         skip_steps = None,
         sigma_min = None,
         sigma_max = None,
@@ -710,6 +719,11 @@ class ElucidatedImagen(nn.Module):
 
                 shape = (batch_size, self.channels, *frame_dims, image_size, image_size)
 
+                if isinstance(unet, (DiffusionAutoEncoders3D)):
+                    text_embeds = unet.encoder(encoder_images)
+                    text_masks = lambda: torch.any(style_emb != 0., dim = -1)
+                    print("sample with style embeds")
+
                 img = self.one_unet_sample(
                     unet,
                     shape,
@@ -762,7 +776,7 @@ class ElucidatedImagen(nn.Module):
     def forward(
         self,
         images, # rename to images or video
-        unet: Union[Unet, Unet3D, NullUnet, DistributedDataParallel] = None,
+        unet: Union[Unet, Unet3D, NullUnet, DistributedDataParallel, DiffusionAutoEncoders3D] = None,
         texts: List[str] = None,
         text_embeds = None,
         text_masks = None,
@@ -890,6 +904,7 @@ class ElucidatedImagen(nn.Module):
         # unet kwargs
 
         unet_kwargs = dict(
+            images = images,
             sigma_data = hp.sigma_data,
             text_embeds = text_embeds,
             text_mask = text_masks,

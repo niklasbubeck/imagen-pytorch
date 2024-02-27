@@ -18,4 +18,4 @@ from imagen_pytorch.utils import load_imagen_from_checkpoint
 
 # video
 
-from imagen_pytorch.imagen_video import Unet3D
+from imagen_pytorch.imagen_video import Unet3D, DiffusionAutoEncoders3D
