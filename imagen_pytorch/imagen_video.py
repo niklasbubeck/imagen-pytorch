@@ -2481,7 +2481,6 @@ class DiffusionAutoEncoders3D(nn.Module):
                                 cond_scale = 1.,
                                 **kwargs
                                 ):
-        print("kwargs: ", kwargs)
         return self.unet.forward_with_cond_scale(*args, **kwargs)
 
     def forward(self, xt, t, images=None, **kwargs):

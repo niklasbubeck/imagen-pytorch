@@ -22,9 +22,11 @@ from einops.layers.torch import Rearrange
 
 from imagen_pytorch.t5 import t5_encode_text, get_encoded_dim, DEFAULT_T5_NAME
 
-from imagen_pytorch.imagen_video import Unet3D, resize_video_to, scale_video_time
+from imagen_pytorch.imagen_video import Unet3D, resize_video_to, scale_video_time, DiffusionAutoEncoders3D
 from imagen_pytorch.semantic_encoder import SemanticEncoder
 # helper functions
+
+
 
 def exists(val):
     return val is not None
@@ -1900,10 +1902,20 @@ class Imagen(nn.Module):
         self.only_train_unet_number = only_train_unet_number
 
         for ind, one_unet in enumerate(unets):
-            assert isinstance(one_unet, (Unet, Unet3D, NullUnet))
+            print(type(one_unet))
+            assert isinstance(one_unet, (DiffusionAutoEncoders3D, Unet, Unet3D, NullUnet))
             is_first = ind == 0
 
-            one_unet = one_unet.cast_model_parameters(
+            if isinstance(one_unet,(DiffusionAutoEncoders3D)):
+                one_unet.unet = one_unet.unet.cast_model_parameters(
+                lowres_cond = not is_first,
+                cond_on_text = self.condition_on_text,
+                text_embed_dim = self.text_embed_dim if self.condition_on_text else None,
+                channels = self.channels,
+                channels_out = self.channels
+            )
+            else: 
+                one_unet = one_unet.cast_model_parameters(
                 lowres_cond = not is_first,
                 cond_on_text = self.condition_on_text,
                 text_embed_dim = self.text_embed_dim if self.condition_on_text else None,
@@ -1924,7 +1936,7 @@ class Imagen(nn.Module):
 
         # determine whether we are training on images or video
 
-        is_video = any([isinstance(unet, Unet3D) for unet in self.unets])
+        is_video = any([isinstance(unet, (Unet3D, DiffusionAutoEncoders3D)) for unet in self.unets])
         self.is_video = is_video
 
         self.right_pad_dims_to_datatype = partial(rearrange, pattern = ('b -> b 1 1 1' if not is_video else 'b -> b 1 1 1 1'))
@@ -2314,6 +2326,7 @@ class Imagen(nn.Module):
         inpaint_masks = None,
         inpaint_resample_times = 5,
         init_images = None,
+        encoder_images = None,
         skip_steps = None,
         batch_size = 1,
         cond_scale = 1.,
@@ -2466,6 +2479,11 @@ class Imagen(nn.Module):
 
                 shape = (batch_size, self.channels, *frame_dims, image_size, image_size)
 
+                if isinstance(unet, (DiffusionAutoEncoders3D)):
+                    text_embeds = unet.encoder(encoder_images)
+                    text_masks = lambda: torch.any(style_emb != 0., dim = -1)
+                    print("sample with style embeds")
+
                 img = self.p_sample_loop(
                     unet,
                     shape,
@@ -2509,7 +2527,7 @@ class Imagen(nn.Module):
     @beartype
     def p_losses(
         self,
-        unet: Union[Unet, Unet3D, NullUnet, DistributedDataParallel],
+        unet: Union[ DiffusionAutoEncoders3D, Unet, Unet3D, NullUnet, DistributedDataParallel],
         x_start,
         times,
         *,
@@ -2579,6 +2597,7 @@ class Imagen(nn.Module):
             lowres_noise_times = self.lowres_noise_schedule.get_condition(lowres_aug_times),
             lowres_cond_img = lowres_cond_img_noisy,
             cond_drop_prob = self.cond_drop_prob,
+            images = x_start,
             **kwargs
         )
 
@@ -2650,7 +2669,7 @@ class Imagen(nn.Module):
     def forward(
         self,
         images, # rename to images or video
-        unet: Union[Unet, Unet3D, NullUnet, DistributedDataParallel] = None,
+        unet: Union[DiffusionAutoEncoders3D, Unet, Unet3D, NullUnet, DistributedDataParallel] = None,
         texts: List[str] = None,
         text_embeds = None,
         text_masks = None,
